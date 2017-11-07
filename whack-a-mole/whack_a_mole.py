@@ -1,6 +1,7 @@
 # Python 3.4.3 with Pygame
 import pygame
 import random
+from queue import Empty
 
 pygame.init()
 pygame.display.set_caption('Whack a Mole')
@@ -10,7 +11,7 @@ pygame.mixer.music.load('Whack.wav')
 screen = pygame.display.set_mode((800, 640))
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
-BROWN = (165,42,42)
+BROWN = (165, 42, 42)
 
 # This sets total number of CELLS in the grid where a mole can appear
 CELLS = 9
@@ -44,12 +45,12 @@ def _print_lable(lable, location):
 def _draw_grid_background():
     grid_cell_locations = _calc_cell_locations()
     for x, y in grid_cell_locations:
-            pygame.draw.rect(screen,
-                             WHITE,
-                             [x,
-                              y,
-                              WIDTH,
-                              HEIGHT])
+        pygame.draw.rect(screen,
+                         WHITE,
+                         [x,
+                          y,
+                          WIDTH,
+                          HEIGHT])
     return
 
 def _draw_grid_number():
@@ -116,7 +117,7 @@ def _draw_time_remaning(time_remaining, location=(620, 315)):
     
     str_time = str(time_remaining).rjust(3)
     if time_remaining < 0:
-      str_time = "0"
+        str_time = "0"
     text_time = font.render(str_time, 1, BLACK)
     (_, height) = font.size("Time")
     y = y + height
@@ -124,56 +125,83 @@ def _draw_time_remaning(time_remaining, location=(620, 315)):
     return
 
 def _random_cell():
-  return random.randint(1, CELLS)
+    return random.randint(1, CELLS)
 
+def _put_on_queue(q, data):
+    if q:
+        q.put(data)
+    return
+
+def _get_from_queue(q):
+    if q:
+        try:
+            data = q.get(block=False)
+            return data
+        except Empty:
+            # don't care if queue is empty, get it next time
+            return None    
+    return None
+
+def _whacked(curr_randcell, curr_score, gpio_output_q):
+    # notify GPIO to turn off light
+    _put_on_queue(gpio_output_q, (curr_randcell, False))
+    score = _score(curr_score)
+    randcell = _random_cell()
+    # notify GPIO to turn on light
+    _put_on_queue(gpio_output_q, (randcell, True))
+    rectplace = _draw_screen(randcell, score)
+    return randcell, score, rectplace
+  
 # Main Loop
-def _play_game():
-  score = 0
-  running = True
-  
-  pygame.time.set_timer(pygame.USEREVENT, 1000)
-  time_remaining = TIME_LIMIT
-  
-  randcell = _random_cell()
-  screen.fill(BLACK)
-  rectplace = _draw_screen(randcell, score)
-  _draw_time_remaning(time_remaining)
-  pygame.display.flip()
-  
-  stopgame = False
-  while running:
-      
-      for event in pygame.event.get():
-          if event.type == pygame.QUIT:
-              running = False
-              stopgame = True            
-          if event.type == pygame.KEYDOWN:
-              if _pick_right_cell(event.key, randcell):
-                  score = _score(score)
-                  randcell = _random_cell()
-                  rectplace = _draw_screen(randcell, score)
-              elif event.key == pygame.k_ESC:
-                  running = False
-                  stopgame = True
+def _play_game(gpio_output_q, gpio_input_q):
+    score = 0
+    running = True
+    
+    pygame.time.set_timer(pygame.USEREVENT, 1000)
+    time_remaining = TIME_LIMIT
+    
+    randcell = _random_cell()
+    screen.fill(BLACK)
+    rectplace = _draw_screen(randcell, score)
+    # notify GPIO to turn on light
+    _put_on_queue(gpio_output_q, (randcell, True))
+    _draw_time_remaning(time_remaining)
+    pygame.display.flip()
+    
+    stopgame = False
+    while running:      
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                stopgame = True            
+            if event.type == pygame.KEYDOWN:
+                if _pick_right_cell(event.key, randcell):
+                    randcell, score, rectplace = _whacked(randcell, score, gpio_output_q)
+                elif event.key == pygame.K_ESCAPE:
+                    running = False
+                    stopgame = True
                 
-          if event.type == pygame.MOUSEBUTTONUP:
+            if event.type == pygame.MOUSEBUTTONUP:
                 pos = pygame.mouse.get_pos() 
                 if rectplace.collidepoint(pos):
-                    score = _score(score)
-                    randcell = _random_cell()
-                    rectplace = _draw_screen(randcell, score)
+                    randcell, score, rectplace = _whacked(randcell, score, gpio_output_q)
           
-          if event.type == pygame.USEREVENT:
-              if time_remaining == 0:
-                  # turn off timer
-                  pygame.time.set_timer(pygame.USEREVENT, 0)
-                  running = False
-              time_remaining = time_remaining - 1
-              _draw_time_remaning(time_remaining)
-      
-      pygame.display.flip()
-  
-  return stopgame
+            if event.type == pygame.USEREVENT:
+                if time_remaining == 0:
+                    # turn off timer
+                    pygame.time.set_timer(pygame.USEREVENT, 0)
+                    running = False
+                time_remaining = time_remaining - 1
+                _draw_time_remaning(time_remaining)
+        
+        # process GPIO input
+        gpio_input = _get_from_queue(gpio_input_q)
+        if gpio_input == randcell:
+            randcell, score, rectplace = _whacked(gpio_input, score, gpio_output_q)
+            
+        pygame.display.update()
+    
+    return stopgame
 
 def _start_game():
     (x, y, w, h) = pygame.draw.rect(screen, BLACK, (100, 200, 600, 200))
@@ -208,11 +236,11 @@ def _start_game():
                 return False            
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_y:
-                  return True
+                    return True
                 elif event.key == pygame.K_n:
-                  return False
+                    return False
                 elif event.key == pygame.k_ESC:
-                  return False
+                    return False
             if event.type == pygame.MOUSEBUTTONUP:
                 pos = pygame.mouse.get_pos() 
                 if rectyes.collidepoint(pos):
@@ -222,12 +250,20 @@ def _start_game():
               
     return False
 
-playgame = _start_game()
-while playgame:
-    stopgame = _play_game()
-    if not stopgame: 
-      playgame = _start_game()
-           
-# Be IDLE friendly. If you forget this line, the program will 'hang'
-# on exit.
-pygame.quit()
+def run_whack_a_mole(gpio_output_q=None, gpio_input_q=None):
+  
+    playgame = _start_game()
+    while playgame:
+        stopgame = _play_game(gpio_output_q, gpio_input_q)
+        if stopgame: 
+            break
+        playgame = _start_game()
+               
+    # Be IDLE friendly. If you forget this line, the program will 'hang'
+    # on exit.
+    pygame.quit()
+    return
+  
+if __name__ == "__main__":
+    run_whack_a_mole()
+    
