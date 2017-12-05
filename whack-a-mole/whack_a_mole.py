@@ -26,6 +26,9 @@ MARGIN = 5
 # This sets time limit for the game (default to 60)
 TIME_LIMIT = 60
 
+# This sets start/end of game to GPIO
+GAME_RUNNING = 0
+
 class mole(pygame.sprite.Sprite):
     def __init__(self, location):
         pygame.sprite.Sprite.__init__(self)
@@ -163,6 +166,8 @@ def _play_game(gpio_output_q, gpio_input_q):
     randcell = _random_cell()
     screen.fill(BLACK)
     rectplace = _draw_screen(randcell, score)
+    # notify GPIO to start of game
+    _put_on_queue(gpio_output_q, (GAME_RUNNING, True))
     # notify GPIO to turn on light
     _put_on_queue(gpio_output_q, (randcell, True))
     _draw_time_remaning(time_remaining)
@@ -201,9 +206,12 @@ def _play_game(gpio_output_q, gpio_input_q):
             
         pygame.display.update()
     
+    print("Score was {}".format(score))
+    # notify GPIO to end of game
+    _put_on_queue(gpio_output_q, (GAME_RUNNING, False))
     return stopgame
 
-def _start_game():
+def _start_game(gpio_input_q):
     (x, y, w, h) = pygame.draw.rect(screen, BLACK, (100, 200, 600, 200))
     (x, y, w, h) = pygame.draw.rect(screen, WHITE, (x + MARGIN, y + MARGIN, w - 2 * MARGIN, h - 2 * MARGIN))
     font = pygame.font.Font(None, 64)
@@ -247,17 +255,24 @@ def _start_game():
                     return True
                 elif rectno.collidepoint(pos):
                     return False
+        
+        # process GPIO input
+        gpio_input = _get_from_queue(gpio_input_q)
+        if gpio_input == "Y":
+            return True
+        elif gpio_input == "N":
+            return False
               
     return False
 
 def run_whack_a_mole(gpio_output_q=None, gpio_input_q=None):
   
-    playgame = _start_game()
+    playgame = _start_game(gpio_input_q)
     while playgame:
         stopgame = _play_game(gpio_output_q, gpio_input_q)
         if stopgame: 
             break
-        playgame = _start_game()
+        playgame = _start_game(gpio_input_q)
                
     # Be IDLE friendly. If you forget this line, the program will 'hang'
     # on exit.
